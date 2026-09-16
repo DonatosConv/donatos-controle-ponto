@@ -75,6 +75,14 @@ button.b.laranja{background:var(--laranja)}
 button.b.ghost{background:#fff;color:var(--ink);border:1.5px solid var(--line2)}
 button.b.verde{background:var(--verde)}
 button.b.perigo{background:var(--vermelho);color:#fff;border-color:var(--vermelho)}
+button.b:disabled{opacity:.45}
+button.maisturno{width:100%;margin:2px 0 10px;border-style:dashed}
+.turno .lb{display:flex;align-items:center;gap:8px}
+.turno .xt{margin-left:auto;background:none;border:0;color:var(--vermelho);font-family:var(--body);
+  font-size:11px;font-weight:600;text-transform:none;letter-spacing:0;padding:2px 4px}
+.faixa{display:grid;grid-template-columns:1fr 1fr auto;gap:8px;align-items:end;margin-bottom:8px}
+.faixa .x{background:none;border:1.5px solid var(--line2);border-radius:8px;padding:12px 12px;color:var(--vermelho);
+  font-weight:700}
 button.b.pq{padding:9px 10px;font-size:12px;width:auto}
 .stack{display:flex;gap:8px;flex-wrap:wrap}
 .stack>button{flex:1}
@@ -150,8 +158,7 @@ td.n,th.n{text-align:right;font-family:var(--mono)}
 <header>
   <img id="logo" alt="Donato's">
   <div class="ev"><b id="hEv">Ponto do Evento</b><span id="hData"></span></div>
-  <button class="trocar" id="btTrocar">trocar</button>
-</header>
+  </header>
 <div id="dbStatus" class="dbst">conectando ao banco...</div>
 <nav>
   <button class="on" data-p="ponto">Ponto</button>
@@ -164,8 +171,14 @@ td.n,th.n{text-align:right;font-family:var(--mono)}
 <!-- ============ PONTO ============ -->
 <section class="pane on" id="p-ponto">
   <div class="card">
+    <div class="stack" style="margin-bottom:12px;align-items:flex-end">
+      <label class="f" style="margin:0;flex:1"><span>Evento aberto</span>
+        <select id="selEvento"></select></label>
+      <button class="b laranja pq" id="btTrocar" style="flex:0 0 auto;padding:13px 14px">Meus eventos</button>
+    </div>
+    <div id="avisoFechado"></div>
     <div class="row2">
-      <label class="f"><span>Evento</span><input id="evNome" placeholder="Ex.: Recanto"></label>
+      <label class="f"><span>Nome do evento</span><input id="evNome" placeholder="Ex.: Recanto"></label>
       <label class="f"><span>Dia</span><input id="evData" type="date"></label>
     </div>
     <label class="f" style="margin:0"><span>Tipo do dia</span><select id="evTipo">
@@ -207,7 +220,7 @@ td.n,th.n{text-align:right;font-family:var(--mono)}
       <button class="b ghost" id="btCsv">Baixar planilha deste evento</button>
       <button class="b ghost" id="btCsvTodos">Baixar planilha de todos os eventos</button>
       <button class="b ghost" id="btCusto">Baixar arquivo de custos para a Central</button>
-      <button class="b ghost" id="btEncerrar">Encerrar: baixar a planilha e apagar este evento</button>
+      <button class="b ghost" id="btEncerrar">Encerrar: baixar a planilha e travar este evento</button>
     </div>
     <div id="avisoSaida" style="margin-top:10px"></div>
     <p class="mut" style="margin-bottom:0">O arquivo de custos entra direto na aba Realizado da Central de Propostas e preenche o campo de diárias sozinho.
@@ -222,7 +235,6 @@ td.n,th.n{text-align:right;font-family:var(--mono)}
     <label class="f"><span>Diária do dia de evento (R$)</span><input id="cDiaria" type="number" inputmode="decimal" value="150"></label>
     <label class="f"><span>Horas cobertas pela diária</span><input id="cHoras" type="number" inputmode="decimal" value="8"></label>
     <label class="f"><span>Hora extra (R$ por hora)</span><input id="cExtra" type="number" inputmode="decimal" value="10"></label>
-    <label class="f"><span>Diária de abastecimento (R$)</span><input id="cAbast" type="number" inputmode="decimal" value="80"></label>
     <label class="f"><span>Adicional de supervisão por dia (R$)</span><input id="cSuperv" type="number" inputmode="decimal" value="50"></label>
     <label class="f" style="margin:0"><span>Arredondar hora extra</span><select id="cArred">
       <option value="min">Por minuto — 1h30 paga R$ 15,00</option>
@@ -230,6 +242,19 @@ td.n,th.n{text-align:right;font-family:var(--mono)}
       <option value="60">Hora cheia, para cima</option>
     </select></label>
   </div>
+  <div class="card">
+    <h3>Abastecimento <span class="mut">pago por faixa de horas</span></h3>
+    <p class="mut" style="margin-top:0">Vale para o dia marcado como abastecimento e para quem você marcar como
+      abastecimento num dia de evento. Paga pela primeira faixa que cobre as horas trabalhadas.</p>
+    <div id="listaFaixas"></div>
+    <button class="b ghost pq" id="btAddFaixa" style="width:100%;border-style:dashed">+ adicionar faixa</button>
+    <label class="f" style="margin-top:12px;margin-bottom:0"><span>Quem passar da última faixa</span>
+      <select id="cAcima">
+        <option value="1">Recebe a diária de evento com hora extra</option>
+        <option value="0">Fica no valor da última faixa</option>
+      </select></label>
+  </div>
+
   <div class="card">
     <h3>Equipe cadastrada</h3>
     <p class="mut" style="margin-top:0">Quem aparece nos atalhos ao adicionar uma pessoa.</p>
@@ -281,7 +306,8 @@ const brData = d => d ? d.split('-').reverse().join('/') : '';
 
 /* ---------- estado ---------- */
 /* eventos[id] = {id, nome, criado, dias:{'2026-09-04':{tipo, pessoas:[...]}}} */
-let DB = {regras:{diaria:150,horas:8,extra:10,abast:80,superv:50,arred:'min'},
+let DB = {regras:{diaria:150,horas:8,extra:10,abast:80,superv:50,arred:'min',
+                  faixas:[{h:3,v:60},{h:4,v:80},{h:7,v:100}], abastAcimaEvento:true},
           equipe:[], eventos:{}, atual:null};
 let DIA = hoje();
 
@@ -349,17 +375,21 @@ async function carregarDoBanco(){
   const [rr, req, rev, rd, rp] = await Promise.all([
     sb.from('regras').select('*').eq('id',1).maybeSingle(),
     sb.from('equipe').select('nome').eq('ativo',true).order('nome'),
-    sb.from('eventos').select('id,nome,criado').order('criado'),
+    sb.from('eventos').select('*').order('criado'),
     sb.from('dias').select('evento_id,data,tipo'),
     sb.from('ponto').select('*').order('ordem')
   ]);
   for (const r of [rr,req,rev,rd,rp]) if (r.error) throw r.error;
 
   if (rr.data) DB.regras = { diaria:+rr.data.diaria, horas:+rr.data.horas, extra:+rr.data.extra,
-                             abast:+rr.data.abast, superv:+rr.data.superv, arred:rr.data.arred };
+                             abast:+rr.data.abast, superv:+rr.data.superv, arred:rr.data.arred,
+                             faixas: (rr.data.faixas && rr.data.faixas.length) ? rr.data.faixas
+                                     : [{h:3,v:60},{h:4,v:80},{h:7,v:100}],
+                             abastAcimaEvento: rr.data.abast_acima_evento !== false };
   DB.equipe = (req.data||[]).map(x=>x.nome);
   DB.eventos = {};
-  (rev.data||[]).forEach(e => { DB.eventos[e.id] = {id:e.id, nome:e.nome||'', criado:e.criado, dias:{}}; });
+  (rev.data||[]).forEach(e => { DB.eventos[e.id] = {id:e.id, nome:e.nome||'', criado:e.criado,
+                                                    fechado:e.fechado||null, dias:{}}; });
   (rd.data||[]).forEach(d => {
     const ev = DB.eventos[d.evento_id]; if (!ev) return;
     ev.dias[d.data] = { tipo:d.tipo, pessoas:[] };
@@ -367,7 +397,12 @@ async function carregarDoBanco(){
   (rp.data||[]).forEach(p => {
     const ev = DB.eventos[p.evento_id]; if (!ev) return;
     const D = ev.dias[p.data] || (ev.dias[p.data] = {tipo:'evento', pessoas:[]});
-    D.pessoas.push({ nome:p.nome, e1:p.e1||'', s1:p.s1||'', e2:p.e2||'', s2:p.s2||'', superv:!!p.superv });
+    const pe = { nome:p.nome, e1:p.e1||'', s1:p.s1||'', e2:p.e2||'', s2:p.s2||'',
+                 superv:!!p.superv, abast:!!p.abast };
+    pe.turnos = (Array.isArray(p.turnos) && p.turnos.length)
+      ? p.turnos.map(t=>({e:t.e||'', s:t.s||''}))
+      : [{e:pe.e1,s:pe.s1},{e:pe.e2,s:pe.s2}];
+    D.pessoas.push(pe);
   });
   if (DB.atual && !DB.eventos[DB.atual]) DB.atual = null;
   try{ localStorage.setItem('ponto_donatos', JSON.stringify(DB)); }catch(e){}
@@ -387,13 +422,15 @@ async function recarregar(){
 function dbRegras(){
   const R = DB.regras;
   return sync(()=>sb.from('regras').upsert({id:1, diaria:R.diaria, horas:R.horas, extra:R.extra,
-    abast:R.abast, superv:R.superv, arred:R.arred}), 'regras');
+    abast:R.abast, superv:R.superv, arred:R.arred,
+    faixas:R.faixas || null, abast_acima_evento: R.abastAcimaEvento !== false}), 'regras');
 }
 function dbEquipeAdd(nome){ return sync(()=>sb.from('equipe').upsert({nome, ativo:true}), 'equipe'); }
 function dbEquipeDel(nome){ return sync(()=>sb.from('equipe').delete().eq('nome',nome), 'equipe'); }
 
 function dbEvento(ev){
-  return sync(()=>sb.from('eventos').upsert({id:ev.id, nome:ev.nome||'', criado:ev.criado||hoje()}), 'evento');
+  return sync(()=>sb.from('eventos').upsert({id:ev.id, nome:ev.nome||'', criado:ev.criado||hoje(),
+    fechado: ev.fechado || null}), 'evento');
 }
 function dbEventoDel(id){ return sync(()=>sb.from('eventos').delete().eq('id',id), 'exclusão do evento'); }
 
@@ -408,8 +445,10 @@ async function dbPonto(evId, data, p, ordem){
   const D = DB.eventos[evId] && DB.eventos[evId].dias[data];
   await dbEvento(DB.eventos[evId] || {id:evId});
   await dbDia(evId, data, D ? D.tipo : 'evento');
+  espelhaTurnos(p);
   await sync(()=>sb.from('ponto').upsert({evento_id:evId, data:data, nome:p.nome,
-    e1:p.e1||'', s1:p.s1||'', e2:p.e2||'', s2:p.s2||'', superv:!!p.superv, ordem:ordem||0}), 'ponto');
+    e1:p.e1||'', s1:p.s1||'', e2:p.e2||'', s2:p.s2||'', superv:!!p.superv, ordem:ordem||0,
+    turnos: turnosDe(p), abast: !!p.abast}), 'ponto');
 }
 function dbPontoDel(evId, data, nome){
   return sync(()=>sb.from('ponto').delete().eq('evento_id',evId).eq('data',data).eq('nome',nome), 'remoção da pessoa');
@@ -531,9 +570,23 @@ function hm(min){
   const s = min < 0 ? '-' : ''; min = Math.abs(Math.round(min));
   return s + Math.floor(min/60) + ':' + String(min%60).padStart(2,'0');
 }
+/* Cada pessoa tem uma lista de turnos. Os dois primeiros continuam indo para
+   e1/s1/e2/s2 no banco, para não quebrar o que já está gravado. */
+function turnosDe(p){
+  if (!Array.isArray(p.turnos) || !p.turnos.length){
+    p.turnos = [{e:p.e1||'', s:p.s1||''}, {e:p.e2||'', s:p.s2||''}];
+  }
+  while (p.turnos.length < 2) p.turnos.push({e:'', s:''});
+  return p.turnos;
+}
+function espelhaTurnos(p){
+  const t = turnosDe(p);
+  p.e1 = (t[0]||{}).e || ''; p.s1 = (t[0]||{}).s || '';
+  p.e2 = (t[1]||{}).e || ''; p.s2 = (t[1]||{}).s || '';
+}
 function trabalhado(p){
   let t = 0;
-  [[p.e1,p.s1],[p.e2,p.s2]].forEach(([a,b]) => {
+  turnosDe(p).forEach(({e:a, s:b}) => {
     const e = minutos(a), s = minutos(b);
     if (e === null || s === null) return;
     t += (s > e ? s : s + 24*60) - e;      // turno que vira o dia
@@ -546,12 +599,38 @@ function arredExtra(min){
   if (modo === '60') return Math.ceil(min/60)*60;
   return min;
 }
+/* Faixas de abastecimento: paga pela primeira faixa que cobre as horas trabalhadas.
+   Acima da última faixa, cai na diária de evento se você marcar essa opção. */
+function faixasAbast(){
+  const f = (DB.regras.faixas && DB.regras.faixas.length)
+    ? DB.regras.faixas : [{h:3,v:60},{h:4,v:80},{h:7,v:100}];
+  return [...f].sort((a,b)=>a.h-b.h);
+}
+function valorAbast(trab){
+  const f = faixasAbast();
+  const horas = trab/60;
+  for (const x of f) if (horas <= +x.h + 0.0001) return {valor:+x.v, faixa:x, estourou:false};
+  return {valor:+f[f.length-1].v, faixa:f[f.length-1], estourou:true};
+}
+function ehAbastecimento(p, tipo){ return tipo === 'abastecimento' || !!p.abast; }
+
 function calcula(p, tipo){
   const trab = trabalhado(p);
-  if (tipo === 'abastecimento')
-    return {trab, extras:0, diaria:+DB.regras.abast, vExtra:0,
-            vSuperv: p.superv ? +DB.regras.superv : 0,
-            total: +DB.regras.abast + (p.superv ? +DB.regras.superv : 0)};
+  if (ehAbastecimento(p, tipo)){
+    const a = valorAbast(trab);
+    const vSuperv = p.superv ? +DB.regras.superv : 0;
+    // passou da última faixa e você optou por pagar como dia de evento
+    if (a.estourou && DB.regras.abastAcimaEvento){
+      const cob = +DB.regras.horas * 60;
+      const ex = arredExtra(Math.max(0, trab - cob));
+      const vEx = ex/60 * +DB.regras.extra;
+      return {trab, extras:ex, diaria:+DB.regras.diaria, vExtra:vEx, vSuperv, abast:true, virouEvento:true,
+              total:+DB.regras.diaria + vEx + vSuperv};
+    }
+    const diaria = trab > 0 ? a.valor : 0;
+    return {trab, extras:0, diaria, vExtra:0, vSuperv, abast:true, faixa:a.faixa, estourou:a.estourou,
+            total: diaria + vSuperv};
+  }
   const cobertas = +DB.regras.horas * 60;
   const extras = arredExtra(Math.max(0, trab - cobertas));
   const vExtra = extras/60 * +DB.regras.extra;
@@ -571,42 +650,42 @@ function pintaPonto(){
   } else {
     box.innerHTML = D.pessoas.map((p,i) => {
       const c = calcula(p, D.tipo);
-      const abast = D.tipo === 'abastecimento';
+      const ts = turnosDe(p);
+      const abast = ehAbastecimento(p, D.tipo);
       return `<div class="pessoa">
         <div class="top">
           <div class="nome">${esc(p.nome)}</div>
           ${p.superv?'<span class="tag t-l">supervisão</span>':''}
+          ${p.abast && D.tipo!=='abastecimento'?'<span class="tag t-n">abastecimento</span>':''}
           <div class="val">${BRL(c.total)}</div>
         </div>
         <div class="corpo">
-          <div class="turno">
-            <div class="lb">Turno 1</div>
+          ${ts.map((t,k)=>`<div class="turno">
+            <div class="lb">Turno ${k+1}${k===1?' <span style="text-transform:none;font-weight:400">— depois do intervalo</span>':''}
+              ${k>1?`<button class="xt" data-xt="${i}|${k}">remover turno</button>`:''}</div>
             <div class="hh">
-              <input type="time" data-p="${i}" data-c="e1" value="${p.e1||''}">
-              <button class="ag" data-ag="${i}|e1">agora</button>
-              <input type="time" data-p="${i}" data-c="s1" value="${p.s1||''}">
-              <button class="ag" data-ag="${i}|s1">agora</button>
+              <input type="time" data-t="${i}|${k}|e" value="${t.e||''}">
+              <button class="ag" data-ag="${i}|${k}|e">agora</button>
+              <input type="time" data-t="${i}|${k}|s" value="${t.s||''}">
+              <button class="ag" data-ag="${i}|${k}|s">agora</button>
             </div>
-          </div>
-          <div class="turno">
-            <div class="lb">Turno 2 <span style="text-transform:none;font-weight:400">— depois do intervalo</span></div>
-            <div class="hh">
-              <input type="time" data-p="${i}" data-c="e2" value="${p.e2||''}">
-              <button class="ag" data-ag="${i}|e2">agora</button>
-              <input type="time" data-p="${i}" data-c="s2" value="${p.s2||''}">
-              <button class="ag" data-ag="${i}|s2">agora</button>
-            </div>
-          </div>
+          </div>`).join('')}
+          <button class="b ghost pq maisturno" data-mais="${i}">+ adicionar turno</button>
           <div class="resumo">
             <span>Trabalhou <b>${hm(c.trab)}</b></span>
-            ${abast?'<span class="tag t-n">diária de abastecimento</span>'
-                   :`<span>Extras <b>${hm(c.extras)}</b></span>
-                     <span>Diária <b>${BRL(c.diaria)}</b></span>
-                     <span>Extra <b>${BRL(c.vExtra)}</b></span>`}
+            ${abast
+              ? `<span class="tag t-n">abastecimento</span>
+                 <span>Faixa <b>${c.virouEvento ? 'passou de '+faixasAbast()[faixasAbast().length-1].h+'h' : 'até '+(c.faixa?c.faixa.h:'—')+'h'}</b></span>
+                 <span>Valor <b>${BRL(c.diaria)}</b></span>
+                 ${c.vExtra?`<span>Extra <b>${BRL(c.vExtra)}</b></span>`:''}`
+              : `<span>Extras <b>${hm(c.extras)}</b></span>
+                 <span>Diária <b>${BRL(c.diaria)}</b></span>
+                 <span>Extra <b>${BRL(c.vExtra)}</b></span>`}
             ${c.vSuperv?`<span>Supervisão <b>${BRL(c.vSuperv)}</b></span>`:''}
           </div>
           <div class="stack" style="margin-top:10px">
             <button class="b ghost pq" data-sup="${i}">${p.superv?'Tirar supervisão':'Marcar supervisão'}</button>
+            <button class="b ghost pq" data-abt="${i}">${p.abast?'Tirar abastecimento':'Marcar abastecimento'}</button>
             <button class="b ghost pq" data-lim="${i}">Limpar horários</button>
             <button class="b ghost pq" data-del="${i}">Remover</button>
           </div>
@@ -615,24 +694,41 @@ function pintaPonto(){
     }).join('');
   }
 
-  $$('[data-p]').forEach(inp => inp.onchange = () => {
-    const iP = +inp.dataset.p;
-    D.pessoas[iP][inp.dataset.c] = inp.value; salvar();
-    dbPonto(DB.atual, DIA, D.pessoas[iP], iP);
-    pintaPonto();
+  $$('[data-t]').forEach(inp => inp.onchange = () => {
+    const [i,k,campo] = inp.dataset.t.split('|');
+    const p = D.pessoas[+i];
+    turnosDe(p)[+k][campo] = inp.value; espelhaTurnos(p); salvar();
+    dbPonto(DB.atual, DIA, p, +i); pintaPonto();
+  });
+  $$('[data-mais]').forEach(b => b.onclick = () => {
+    const i = +b.dataset.mais, p = D.pessoas[i];
+    turnosDe(p).push({e:'', s:''}); salvar();
+    dbPonto(DB.atual, DIA, p, i); pintaPonto();
+  });
+  $$('[data-xt]').forEach(b => b.onclick = () => {
+    const [i,k] = b.dataset.xt.split('|');
+    const p = D.pessoas[+i];
+    turnosDe(p).splice(+k,1); espelhaTurnos(p); salvar();
+    dbPonto(DB.atual, DIA, p, +i); pintaPonto();
+  });
+  $$('[data-abt]').forEach(b => b.onclick = () => {
+    const i = +b.dataset.abt, p = D.pessoas[i];
+    p.abast = !p.abast; salvar(); dbPonto(DB.atual, DIA, p, i); pintaPonto();
   });
   $$('[data-ag]').forEach(b => b.onclick = () => {
-    const [i,campo] = b.dataset.ag.split('|');
+    const [i,k,campo] = b.dataset.ag.split('|');
     const agora = new Date();
-    D.pessoas[+i][campo] = String(agora.getHours()).padStart(2,'0')+':'+String(agora.getMinutes()).padStart(2,'0');
-    salvar(); dbPonto(DB.atual, DIA, D.pessoas[+i], +i); pintaPonto();
+    const p = D.pessoas[+i];
+    turnosDe(p)[+k][campo] = String(agora.getHours()).padStart(2,'0')+':'+String(agora.getMinutes()).padStart(2,'0');
+    espelhaTurnos(p); salvar(); dbPonto(DB.atual, DIA, p, +i); pintaPonto();
   });
   $$('[data-sup]').forEach(b => b.onclick = () => {
     const p = D.pessoas[+b.dataset.sup]; p.superv = !p.superv; salvar();
     dbPonto(DB.atual, DIA, p, +b.dataset.sup); pintaPonto();
   });
   $$('[data-lim]').forEach(b => b.onclick = () => {
-    const p = D.pessoas[+b.dataset.lim]; p.e1=p.s1=p.e2=p.s2=''; salvar();
+    const p = D.pessoas[+b.dataset.lim];
+    p.turnos = [{e:'',s:''},{e:'',s:''}]; espelhaTurnos(p); salvar();
     dbPonto(DB.atual, DIA, p, +b.dataset.lim); pintaPonto();
   });
   $$('[data-del]').forEach(b => confirma(b, 'Remover mesmo?', () => {
@@ -654,6 +750,15 @@ function pintaPonto(){
   $('#barraRot').textContent = 'Total de ' + brData(DIA);
   $('#barraVal').textContent = BRL(totDia);
   const e = EV();
+  pintaSeletorEvento();
+  const fechado = !!e.fechado;
+  const av = $('#avisoFechado');
+  if (av) av.innerHTML = fechado
+    ? `<div class="aviso ok"><b>Evento encerrado em ${brData(e.fechado)}.</b>
+        A planilha já foi baixada. Para lançar de novo, toque em <b>Reabrir</b>.
+        <div class="stack" style="margin-top:8px"><button class="b ghost pq" id="btReabrir">Reabrir evento</button></div></div>`
+    : '';
+  if ($('#btReabrir')) $('#btReabrir').onclick = () => { delete EV().fechado; salvar(); dbEvento(EV()); pintaPonto(); };
   $('#hEv').textContent = e.nome || 'Evento sem nome';
   const nEv = Object.keys(DB.eventos).length;
   $('#hData').textContent = brData(DIA) + ' · ' + D.pessoas.length + (D.pessoas.length===1?' pessoa':' pessoas')
@@ -664,9 +769,10 @@ function pintaPonto(){
 function addPessoa(nome){
   nome = String(nome||'').trim().toUpperCase();
   if (!nome) return;
+  if (EV().fechado){ aviso('Este evento está encerrado. Toque em <b>Reabrir evento</b> no topo para voltar a lançar.', true); return; }
   const D = dia(DIA);
   if (D.pessoas.some(p=>p.nome===nome)){ alert(nome + ' já está neste dia.'); return; }
-  D.pessoas.push({nome, e1:'', s1:'', e2:'', s2:'', superv:false});
+  D.pessoas.push({nome, e1:'', s1:'', e2:'', s2:'', superv:false, abast:false, turnos:[{e:'',s:''},{e:'',s:''}]});
   const novaEquipe = !DB.equipe.includes(nome);
   if (novaEquipe) DB.equipe.push(nome);
   DB.equipe.sort();
@@ -712,6 +818,13 @@ function pintaFechamento(){
 
   $('#qtdDias').textContent = porDia.length ? porDia.length + (porDia.length===1?' dia':' dias') : '';
   if ($('#fechNome')) $('#fechNome').textContent = EV().nome || '';
+  const fech = !!EV().fechado;
+  const bt = $('#btEncerrar');
+  if (bt){
+    bt.disabled = fech;
+    bt.textContent = fech ? 'Evento já encerrado em ' + brData(EV().fechado)
+                          : 'Encerrar: baixar a planilha e travar este evento';
+  }
 
   $('#tbPessoa').innerHTML = lista.length ? '<thead><tr><th>Pessoa</th><th class="n">Dias</th><th class="n">Horas</th>'+
     '<th class="n">Extras</th><th class="n">Total</th></tr></thead><tbody>'+
@@ -739,7 +852,7 @@ function textoWhats(){
 ${porDia.length?porDia.map(d=>brData(d.data)).join(' · '):''}
 
 *POR PESSOA*
-${lista.map(p=>`• ${p.nome}: ${BRL(p.total)}  _(${p.dias}d · ${hm(p.trab)} · extras ${hm(p.extras)})_`).join('\n')}
+${lista.map(p=>`• ${p.nome}: ${BRL(p.total)}  _(${p.dias}d · ${hm(p.trab)}${p.extras?' · extras '+hm(p.extras):''})_`).join('\n')}
 
 *POR DIA*
 ${porDia.map(d=>`• ${brData(d.data)}${d.tipo==='abastecimento'?' (abastecimento)':''}: ${BRL(d.total)} — ${d.pessoas} pessoa(s)`).join('\n')}
@@ -801,19 +914,21 @@ function csvDoEvento(ev){
     const D = ev.dias[d];
     D.pessoas.forEach(p => {
       const c = calcula(p, D.tipo);
-      linhas.push([ev.nome||'Evento', brData(d), D.tipo, p.nome, p.e1||'', p.s1||'', p.e2||'', p.s2||'',
+      const ts = turnosDe(p).filter(t=>t.e||t.s).map(t=>(t.e||'')+'-'+(t.s||'')).join(' | ');
+      linhas.push([ev.nome||'Evento', brData(d),
+        (ehAbastecimento(p, D.tipo) ? 'abastecimento' : D.tipo), p.nome, ts,
         hm(c.trab), hm(c.extras), c.diaria.toFixed(2), c.vExtra.toFixed(2), c.vSuperv.toFixed(2),
         c.total.toFixed(2)].join(';'));
     });
   });
   return linhas;
 }
-const CAB_CSV = 'evento;dia;tipo;pessoa;entrada1;saida1;entrada2;saida2;horas;extras;diaria;hora_extra;supervisao;total';
+const CAB_CSV = 'evento;dia;tipo;pessoa;turnos;horas;extras;diaria;hora_extra;supervisao;total';
 function csvCompleto(){
   const ev = EV();
   const {geral} = totais(ev);
   return [CAB_CSV, ...csvDoEvento(ev), '',
-          'TOTAL DO EVENTO;;;;;;;;;;;;;'+geral.total.toFixed(2)].join('\n');
+          'TOTAL DO EVENTO;;;;;;;;;;'+geral.total.toFixed(2)].join('\n');
 }
 function csvTodosEventos(){
   const linhas = [CAB_CSV];
@@ -824,7 +939,7 @@ function csvTodosEventos(){
     linhas.push(...l);
     soma += totais(ev).geral.total;
   });
-  linhas.push(''); linhas.push('TOTAL DE TODOS OS EVENTOS;;;;;;;;;;;;;'+soma.toFixed(2));
+  linhas.push(''); linhas.push('TOTAL DE TODOS OS EVENTOS;;;;;;;;;;'+soma.toFixed(2));
   return linhas.join('\n');
 }
 function csvCustos(){
@@ -834,6 +949,14 @@ function csvCustos(){
 }
 
 /* ---------- meus eventos ---------- */
+function pintaSeletorEvento(){
+  const sel = $('#selEvento'); if (!sel) return;
+  const ids = Object.keys(DB.eventos);
+  sel.innerHTML = ids.map(id =>
+    `<option value="${id}" ${id===DB.atual?'selected':''}>${esc(DB.eventos[id].nome || 'Evento sem nome')}</option>`
+  ).join('') || '<option value="">Nenhum evento</option>';
+}
+
 function pintaEventos(){
   const ids = Object.keys(DB.eventos);
   $('#listaEventos').innerHTML = ids.length ? ids.map(id => {
@@ -867,6 +990,32 @@ function pintaEventos(){
   }));
 }
 
+/* ---------- faixas de abastecimento ---------- */
+function pintaFaixas(){
+  const box = $('#listaFaixas'); if (!box) return;
+  const f = faixasAbast();
+  box.innerHTML = f.map((x,i)=>`<div class="faixa">
+    <label class="f" style="margin:0"><span>Até quantas horas</span>
+      <input type="number" inputmode="decimal" step="0.5" data-fh="${i}" value="${x.h}"></label>
+    <label class="f" style="margin:0"><span>Paga (R$)</span>
+      <input type="number" inputmode="decimal" step="1" data-fv="${i}" value="${x.v}"></label>
+    <button class="x" data-fx="${i}">✕</button>
+  </div>`).join('');
+  $$('[data-fh]').forEach(inp => inp.onchange = () => {
+    const f2 = faixasAbast(); f2[+inp.dataset.fh].h = parseFloat(inp.value.replace(',','.'))||0;
+    DB.regras.faixas = f2; salvar(); dbRegras(); pintaFaixas(); pintaPonto();
+  });
+  $$('[data-fv]').forEach(inp => inp.onchange = () => {
+    const f2 = faixasAbast(); f2[+inp.dataset.fv].v = parseFloat(inp.value.replace(',','.'))||0;
+    DB.regras.faixas = f2; salvar(); dbRegras(); pintaFaixas(); pintaPonto();
+  });
+  $$('[data-fx]').forEach(b => b.onclick = () => {
+    const f2 = faixasAbast();
+    if (f2.length <= 1){ aviso('Precisa sobrar ao menos uma faixa.', true); return; }
+    f2.splice(+b.dataset.fx,1); DB.regras.faixas = f2; salvar(); dbRegras(); pintaFaixas(); pintaPonto();
+  });
+}
+
 /* ---------- ajustes ---------- */
 function pintaEquipe(){
   $('#equipeCad').innerHTML = DB.equipe.length
@@ -892,7 +1041,8 @@ async function init(){
   $('#evNome').value = EV().nome || '';
   const R = DB.regras;
   $('#cDiaria').value = R.diaria; $('#cHoras').value = R.horas; $('#cExtra').value = R.extra;
-  $('#cAbast').value = R.abast; $('#cSuperv').value = R.superv; $('#cArred').value = R.arred;
+  if ($('#cAcima')) $('#cAcima').value = R.abastAcimaEvento === false ? '0' : '1';
+ $('#cSuperv').value = R.superv; $('#cArred').value = R.arred;
 
   $$('nav button').forEach(b => b.onclick = () => {
     $$('nav button').forEach(x=>x.classList.toggle('on', x===b));
@@ -909,10 +1059,17 @@ async function init(){
   $('#btAdd').onclick = () => { addPessoa($('#novoNome').value); $('#novoNome').value=''; };
   $('#novoNome').onkeydown = e => { if (e.key === 'Enter') $('#btAdd').click(); };
 
-  [['#cDiaria','diaria'],['#cHoras','horas'],['#cExtra','extra'],['#cAbast','abast'],['#cSuperv','superv']]
+  [['#cDiaria','diaria'],['#cHoras','horas'],['#cExtra','extra'],['#cSuperv','superv']]
     .forEach(([sel,k]) => { $(sel).oninput = () => { DB.regras[k] = parseFloat($(sel).value.replace(',','.'))||0; salvar();
       deb('regras', dbRegras, 800); pintaPonto(); }; });
   $('#cArred').onchange = () => { DB.regras.arred = $('#cArred').value; salvar(); dbRegras(); pintaPonto(); };
+  if ($('#cAcima')) $('#cAcima').onchange = () => {
+    DB.regras.abastAcimaEvento = $('#cAcima').value === '1'; salvar(); dbRegras(); pintaPonto(); };
+  if ($('#btAddFaixa')) $('#btAddFaixa').onclick = () => {
+    const f = faixasAbast();
+    f.push({h: (+f[f.length-1].h || 0) + 1, v: +f[f.length-1].v || 0});
+    DB.regras.faixas = f; salvar(); dbRegras(); pintaFaixas();
+  };
 
   $('#btWhats').onclick = () => {
     const t = textoWhats();
@@ -922,18 +1079,13 @@ async function init(){
   $('#btCsv').onclick = () => baixar('ponto_'+slug(EV().nome)+'.csv', csvCompleto(), 'text/csv;charset=utf-8');
   $('#btCsvTodos').onclick = () => baixar('ponto_todos_eventos_'+hoje()+'.csv', csvTodosEventos(), 'text/csv;charset=utf-8');
   $('#btCusto').onclick = () => baixar('custos_diarias_'+slug(EV().nome)+'.csv', csvCustos(), 'text/csv;charset=utf-8');
-  confirma($('#btEncerrar'), 'Baixar e apagar mesmo?', () => {
-    const nome = EV().nome, id = DB.atual;
+  confirma($('#btEncerrar'), 'Baixar e encerrar mesmo?', () => {
+    const nome = EV().nome;
     baixar('ponto_'+slug(nome)+'.csv', csvCompleto(), 'text/csv;charset=utf-8');
-    setTimeout(() => {
-      dbEventoDel(id);
-      delete DB.eventos[id];
-      if (DB.atual === id) DB.atual = null;
-      salvar(); EV(); $('#evNome').value = EV().nome || '';
-      pintaPonto();
-      aviso('Planilha de <b>' + esc(nome) + '</b> baixada e o evento apagado do aparelho.');
-      $$('nav button')[0].click();
-    }, 900);
+    EV().fechado = hoje();
+    salvar(); dbEvento(EV());
+    pintaPonto(); pintaFechamento();
+    aviso('Planilha de <b>' + esc(nome) + '</b> baixada. O evento está <b>encerrado</b> e não aceita mais lançamento.');
   });
 
   $('#btBackup').onclick = () => baixar('ponto_backup_'+hoje()+'.json', JSON.stringify(DB), 'application/json');
@@ -954,6 +1106,14 @@ async function init(){
 
   // troca de evento
   $('#btTrocar').onclick = () => { pintaEventos(); $('#modalEv').classList.add('on'); };
+  $('#selEvento').onchange = () => {
+    if (!$('#selEvento').value) return;
+    DB.atual = $('#selEvento').value; salvar();
+    $('#evNome').value = EV().nome || '';
+    const ds = Object.keys(EV().dias).sort();
+    if (ds.length){ DIA = ds[ds.length-1]; $('#evData').value = DIA; }
+    pintaPonto(); window.scrollTo(0,0);
+  };
   $('#btFecharModal').onclick = () => $('#modalEv').classList.remove('on');
   $('#modalEv').onclick = e => { if (e.target.id === 'modalEv') $('#modalEv').classList.remove('on'); };
   $('#btNovoEv').onclick = () => {
@@ -968,6 +1128,6 @@ async function init(){
 
   init2();
 }
-function init2(){ EV(); $('#evNome').value = EV().nome || ''; pintaPonto(); pintaEquipe(); }
+function init2(){ if (typeof pintaFaixas==='function') pintaFaixas(); EV(); $('#evNome').value = EV().nome || ''; pintaPonto(); pintaEquipe(); }
 init();
 </script>
