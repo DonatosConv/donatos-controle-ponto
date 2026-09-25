@@ -398,7 +398,8 @@ async function carregarDoBanco(){
     const ev = DB.eventos[p.evento_id]; if (!ev) return;
     const D = ev.dias[p.data] || (ev.dias[p.data] = {tipo:'evento', pessoas:[]});
     const pe = { nome:p.nome, e1:p.e1||'', s1:p.s1||'', e2:p.e2||'', s2:p.s2||'',
-                 superv:!!p.superv, abast:!!p.abast };
+                 superv:!!p.superv, abast:!!p.abast,
+                 abastMin: (p.abast_min === null || p.abast_min === undefined) ? undefined : +p.abast_min };
     pe.turnos = (Array.isArray(p.turnos) && p.turnos.length)
       ? p.turnos.map(t=>({e:t.e||'', s:t.s||''}))
       : [{e:pe.e1,s:pe.s1},{e:pe.e2,s:pe.s2}];
@@ -448,7 +449,7 @@ async function dbPonto(evId, data, p, ordem){
   espelhaTurnos(p);
   await sync(()=>sb.from('ponto').upsert({evento_id:evId, data:data, nome:p.nome,
     e1:p.e1||'', s1:p.s1||'', e2:p.e2||'', s2:p.s2||'', superv:!!p.superv, ordem:ordem||0,
-    turnos: turnosDe(p), abast: !!p.abast}), 'ponto');
+    turnos: turnosDe(p), abast: !!p.abast, abast_min: p.abastMin ?? null}), 'ponto');
 }
 function dbPontoDel(evId, data, nome){
   return sync(()=>sb.from('ponto').delete().eq('evento_id',evId).eq('data',data).eq('nome',nome), 'remoção da pessoa');
@@ -613,30 +614,50 @@ function valorAbast(trab){
   return {valor:+f[f.length-1].v, faixa:f[f.length-1], estourou:true};
 }
 function ehAbastecimento(p, tipo){ return tipo === 'abastecimento' || !!p.abast; }
+/* minutos usados para achar a faixa do abastecimento somado a um dia de evento.
+   Se você não informar, usa as horas trabalhadas no dia. */
+function minutosAbast(p){
+  return (p.abastMin === undefined || p.abastMin === null || p.abastMin === '')
+    ? trabalhado(p) : Math.max(0, +p.abastMin);
+}
 
 function calcula(p, tipo){
   const trab = trabalhado(p);
-  if (ehAbastecimento(p, tipo)){
+  const vSuperv = p.superv ? +DB.regras.superv : 0;
+
+  // DIA INTEIRO DE ABASTECIMENTO: paga só pela faixa, sem diária de evento
+  if (tipo === 'abastecimento'){
     const a = valorAbast(trab);
-    const vSuperv = p.superv ? +DB.regras.superv : 0;
-    // passou da última faixa e você optou por pagar como dia de evento
     if (a.estourou && DB.regras.abastAcimaEvento){
       const cob = +DB.regras.horas * 60;
       const ex = arredExtra(Math.max(0, trab - cob));
       const vEx = ex/60 * +DB.regras.extra;
-      return {trab, extras:ex, diaria:+DB.regras.diaria, vExtra:vEx, vSuperv, abast:true, virouEvento:true,
+      return {trab, extras:ex, diaria:+DB.regras.diaria, vExtra:vEx, vAbast:0, vSuperv,
+              abast:true, diaTodo:true, virouEvento:true,
               total:+DB.regras.diaria + vEx + vSuperv};
     }
     const diaria = trab > 0 ? a.valor : 0;
-    return {trab, extras:0, diaria, vExtra:0, vSuperv, abast:true, faixa:a.faixa, estourou:a.estourou,
-            total: diaria + vSuperv};
+    return {trab, extras:0, diaria, vExtra:0, vAbast:0, vSuperv, abast:true, diaTodo:true,
+            faixa:a.faixa, estourou:a.estourou, total: diaria + vSuperv};
   }
+
+  // DIA DE EVENTO: diária cheia + hora extra
   const cobertas = +DB.regras.horas * 60;
   const extras = arredExtra(Math.max(0, trab - cobertas));
   const vExtra = extras/60 * +DB.regras.extra;
-  const vSuperv = p.superv ? +DB.regras.superv : 0;
   const diaria = trab > 0 ? +DB.regras.diaria : 0;
-  return {trab, extras, diaria, vExtra, vSuperv, total: diaria + vExtra + vSuperv};
+
+  // quem também fez abastecimento recebe o adicional SOMADO ao dia
+  let vAbast = 0, faixaAb = null, minAb = 0;
+  if (p.abast){
+    minAb = minutosAbast(p);
+    if (minAb > 0){
+      const a = valorAbast(minAb);       // aqui a faixa nunca vira diária de evento
+      vAbast = a.valor; faixaAb = a.faixa;
+    }
+  }
+  return {trab, extras, diaria, vExtra, vAbast, vSuperv, abast: !!p.abast, diaTodo:false,
+          faixaAb, minAb, total: diaria + vExtra + vAbast + vSuperv};
 }
 function dia(d){ const e = EV(); return e.dias[d] || (e.dias[d] = {tipo:'evento', pessoas:[]}); }
 
@@ -671,16 +692,22 @@ function pintaPonto(){
             </div>
           </div>`).join('')}
           <button class="b ghost pq maisturno" data-mais="${i}">+ adicionar turno</button>
+          ${(p.abast && D.tipo!=='abastecimento') ? `<div class="turno">
+            <div class="lb">Horas do abastecimento <span style="text-transform:none;font-weight:400">— em branco usa as horas do dia</span></div>
+            <input type="text" inputmode="decimal" data-abh="${i}" placeholder="${hm(c.trab)}"
+                   value="${p.abastMin ? hm(p.abastMin) : ''}" style="text-align:center">
+          </div>` : ''}
           <div class="resumo">
             <span>Trabalhou <b>${hm(c.trab)}</b></span>
-            ${abast
-              ? `<span class="tag t-n">abastecimento</span>
+            ${c.diaTodo
+              ? `<span class="tag t-n">dia de abastecimento</span>
                  <span>Faixa <b>${c.virouEvento ? 'passou de '+faixasAbast()[faixasAbast().length-1].h+'h' : 'até '+(c.faixa?c.faixa.h:'—')+'h'}</b></span>
                  <span>Valor <b>${BRL(c.diaria)}</b></span>
                  ${c.vExtra?`<span>Extra <b>${BRL(c.vExtra)}</b></span>`:''}`
               : `<span>Extras <b>${hm(c.extras)}</b></span>
                  <span>Diária <b>${BRL(c.diaria)}</b></span>
-                 <span>Extra <b>${BRL(c.vExtra)}</b></span>`}
+                 <span>Extra <b>${BRL(c.vExtra)}</b></span>
+                 ${c.vAbast?`<span>Abastecimento <b>${BRL(c.vAbast)}</b> <span class="mut">(${hm(c.minAb)} · faixa até ${c.faixaAb?c.faixaAb.h:'—'}h)</span></span>`:''}`}
             ${c.vSuperv?`<span>Supervisão <b>${BRL(c.vSuperv)}</b></span>`:''}
           </div>
           <div class="stack" style="margin-top:10px">
@@ -710,6 +737,14 @@ function pintaPonto(){
     const p = D.pessoas[+i];
     turnosDe(p).splice(+k,1); espelhaTurnos(p); salvar();
     dbPonto(DB.atual, DIA, p, +i); pintaPonto();
+  });
+  $$('[data-abh]').forEach(inp => inp.onchange = () => {
+    const i = +inp.dataset.abh, p = D.pessoas[i];
+    const v = String(inp.value||'').trim();
+    if (!v){ delete p.abastMin; }
+    else if (v.includes(':')) p.abastMin = minutos(v) || 0;
+    else p.abastMin = Math.round((parseFloat(v.replace(',','.'))||0) * 60);
+    salvar(); dbPonto(DB.atual, DIA, p, i); pintaPonto();
   });
   $$('[data-abt]').forEach(b => b.onclick = () => {
     const i = +b.dataset.abt, p = D.pessoas[i];
@@ -788,22 +823,25 @@ function totais(ev){
   const porPessoa = {}, porDia = [];
   Object.keys(alvo.dias).sort().forEach(d => {
     const D = alvo.dias[d];
-    let td = {data:d, tipo:D.tipo, pessoas:0, diaria:0, extra:0, superv:0, total:0};
+    let td = {data:d, tipo:D.tipo, pessoas:0, diaria:0, extra:0, abast:0, superv:0, total:0};
     D.pessoas.forEach(p => {
       const c = calcula(p, D.tipo);
       if (c.total <= 0 && c.trab <= 0) return;
       const a = porPessoa[p.nome] || (porPessoa[p.nome] = {nome:p.nome, dias:0, trab:0, extras:0,
-                                                          diaria:0, extra:0, superv:0, total:0});
+                                                          diaria:0, extra:0, abast:0, superv:0, total:0});
       a.dias++; a.trab += c.trab; a.extras += c.extras;
-      a.diaria += c.diaria; a.extra += c.vExtra; a.superv += c.vSuperv; a.total += c.total;
-      td.pessoas++; td.diaria += c.diaria; td.extra += c.vExtra; td.superv += c.vSuperv; td.total += c.total;
+      a.diaria += c.diaria; a.extra += c.vExtra; a.abast += (c.vAbast||0);
+      a.superv += c.vSuperv; a.total += c.total;
+      td.pessoas++; td.diaria += c.diaria; td.extra += c.vExtra; td.abast += (c.vAbast||0);
+      td.superv += c.vSuperv; td.total += c.total;
     });
     if (td.pessoas) porDia.push(td);
   });
   const lista = Object.values(porPessoa).sort((a,b)=>b.total-a.total);
   const geral = lista.reduce((s,p)=>({diaria:s.diaria+p.diaria, extra:s.extra+p.extra,
-    superv:s.superv+p.superv, total:s.total+p.total, trab:s.trab+p.trab, extras:s.extras+p.extras}),
-    {diaria:0,extra:0,superv:0,total:0,trab:0,extras:0});
+    abast:s.abast+p.abast, superv:s.superv+p.superv, total:s.total+p.total,
+    trab:s.trab+p.trab, extras:s.extras+p.extras}),
+    {diaria:0,extra:0,abast:0,superv:0,total:0,trab:0,extras:0});
   return {lista, porDia, geral};
 }
 
@@ -813,7 +851,10 @@ function pintaFechamento(){
     ['Total a pagar', BRL(geral.total), lista.length + (lista.length===1?' pessoa':' pessoas'), 'v'],
     ['Diárias', BRL(geral.diaria), porDia.length + (porDia.length===1?' dia':' dias'), ''],
     ['Horas extras', BRL(geral.extra), hm(geral.extras) + ' de excedente', ''],
-    ['Supervisão', BRL(geral.superv), '', '']
+    ['Abastecimento e supervisão', BRL(geral.abast + geral.superv),
+     (geral.abast?BRL(geral.abast)+' de abastecimento':'') +
+     (geral.abast && geral.superv?' · ':'') +
+     (geral.superv?BRL(geral.superv)+' de supervisão':''), '']
   ].map(([l,v,n,c])=>`<div class="kpi ${c}"><div class="lb">${l}</div><div class="vl">${v}</div><div class="nt">${n}</div></div>`).join('');
 
   $('#qtdDias').textContent = porDia.length ? porDia.length + (porDia.length===1?' dia':' dias') : '';
@@ -917,18 +958,18 @@ function csvDoEvento(ev){
       const ts = turnosDe(p).filter(t=>t.e||t.s).map(t=>(t.e||'')+'-'+(t.s||'')).join(' | ');
       linhas.push([ev.nome||'Evento', brData(d),
         (ehAbastecimento(p, D.tipo) ? 'abastecimento' : D.tipo), p.nome, ts,
-        hm(c.trab), hm(c.extras), c.diaria.toFixed(2), c.vExtra.toFixed(2), c.vSuperv.toFixed(2),
-        c.total.toFixed(2)].join(';'));
+        hm(c.trab), hm(c.extras), c.diaria.toFixed(2), c.vExtra.toFixed(2),
+        (c.vAbast||0).toFixed(2), c.vSuperv.toFixed(2), c.total.toFixed(2)].join(';'));
     });
   });
   return linhas;
 }
-const CAB_CSV = 'evento;dia;tipo;pessoa;turnos;horas;extras;diaria;hora_extra;supervisao;total';
+const CAB_CSV = 'evento;dia;tipo;pessoa;turnos;horas;extras;diaria;hora_extra;abastecimento;supervisao;total';
 function csvCompleto(){
   const ev = EV();
   const {geral} = totais(ev);
   return [CAB_CSV, ...csvDoEvento(ev), '',
-          'TOTAL DO EVENTO;;;;;;;;;;'+geral.total.toFixed(2)].join('\n');
+          'TOTAL DO EVENTO;;;;;;;;;;;'+geral.total.toFixed(2)].join('\n');
 }
 function csvTodosEventos(){
   const linhas = [CAB_CSV];
@@ -939,13 +980,31 @@ function csvTodosEventos(){
     linhas.push(...l);
     soma += totais(ev).geral.total;
   });
-  linhas.push(''); linhas.push('TOTAL DE TODOS OS EVENTOS;;;;;;;;;;'+soma.toFixed(2));
+  linhas.push(''); linhas.push('TOTAL DE TODOS OS EVENTOS;;;;;;;;;;;'+soma.toFixed(2));
   return linhas.join('\n');
 }
 function csvCustos(){
   const {geral} = totais();
   return ['descricao;valor',
-    'DIARIAS DA EQUIPE;'+(geral.diaria+geral.extra+geral.superv).toFixed(2)].join('\n');
+    'DIARIAS DA EQUIPE;'+(geral.diaria+geral.extra+geral.abast+geral.superv).toFixed(2)].join('\n');
+}
+
+/* devolve a aba Ponto ao estado inicial: evento em branco, data de hoje, tipo padrão */
+function limpaTela(){
+  DB.atual = null;
+  EV();                                  // cria um evento novo e vazio
+  DIA = hoje();
+  if ($('#evNome'))  $('#evNome').value  = '';
+  if ($('#evData'))  $('#evData').value  = DIA;
+  if ($('#evTipo'))  $('#evTipo').value  = 'evento';
+  if ($('#novoNome')) $('#novoNome').value = '';
+  const D = dia(DIA); D.tipo = 'evento';
+  salvar();
+  pintaSeletorEvento();
+  pintaPonto();
+  pintaFechamento();
+  if ($('#modalEv')) $('#modalEv').classList.remove('on');
+  window.scrollTo(0,0);
 }
 
 /* ---------- meus eventos ---------- */
@@ -983,10 +1042,13 @@ function pintaEventos(){
     pintaPonto(); window.scrollTo(0,0);
   });
   $$('[data-evdel]').forEach(b => confirma(b, 'apagar?', () => {
+    const era = (DB.atual === b.dataset.evdel);
     dbEventoDel(b.dataset.evdel);
     delete DB.eventos[b.dataset.evdel];
-    if (DB.atual === b.dataset.evdel) DB.atual = null;
-    salvar(); EV(); pintaEventos(); pintaPonto();
+    if (era) DB.atual = null;
+    salvar();
+    if (era) limpaTela(); else { EV(); pintaPonto(); }
+    pintaEventos();
   }));
 }
 
@@ -1096,11 +1158,26 @@ async function init(){
   };
   confirma($('#btLimpaDia'), 'Apagar mesmo este dia?', () => {
     dbDiaDel(DB.atual, DIA);
-    delete EV().dias[DIA]; salvar(); pintaPonto(); pintaEquipe();
+    const ev = EV();
+    delete ev.dias[DIA];
+    // se o evento ficou sem nenhum lançamento, ele também sai da frente
+    const vazio = !Object.keys(ev.dias).some(d => (ev.dias[d].pessoas||[]).length);
+    if (vazio){
+      dbEventoDel(ev.id);
+      delete DB.eventos[ev.id];
+      DB.atual = null;
+      salvar(); limpaTela();
+      aviso('Dia apagado. Como o evento ficou sem lançamento, ele também foi encerrado.');
+    } else {
+      salvar(); DIA = hoje(); $('#evData').value = DIA; pintaPonto();
+    }
+    pintaEquipe();
   });
   confirma($('#btApagarTudo'), 'Apagar TUDO mesmo?', () => {
     dbApagarEventos();
-    DB.eventos = {}; DB.atual = null; salvar(); EV(); pintaPonto(); pintaEquipe();
+    DB.eventos = {}; DB.atual = null; salvar();
+    limpaTela();                       // volta a tela do ponto para o estado inicial
+    pintaEquipe();
     aviso('Todos os eventos foram apagados. A equipe e as regras continuam.');
   });
 
